@@ -39,6 +39,7 @@ import lombok.extern.slf4j.Slf4j;
  * Default implementation for ContainerAttributeIndex.
  */
 @Slf4j
+public
 class ContainerAttributeIndexImpl implements ContainerAttributeIndex {
     //region Members
 

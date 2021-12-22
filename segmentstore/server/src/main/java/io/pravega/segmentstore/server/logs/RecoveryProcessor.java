@@ -23,7 +23,7 @@ import io.pravega.segmentstore.contracts.StreamSegmentException;
 import io.pravega.segmentstore.server.DataCorruptionException;
 import io.pravega.segmentstore.server.SegmentStoreMetrics;
 import io.pravega.segmentstore.server.ServiceHaltException;
-import io.pravega.segmentstore.server.UpdateableContainerMetadata;
+import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
 import io.pravega.segmentstore.server.logs.operations.CheckpointOperationBase;
 import io.pravega.segmentstore.server.logs.operations.MetadataCheckpointOperation;
 import io.pravega.segmentstore.server.logs.operations.Operation;
@@ -39,7 +39,7 @@ import lombok.extern.slf4j.Slf4j;
 class RecoveryProcessor {
     //region Members
 
-    private final UpdateableContainerMetadata metadata;
+    private final StreamSegmentContainerMetadata containerMetadata;
     private final DurableDataLog durableDataLog;
     private final MemoryStateUpdater stateUpdater;
     private final String traceObjectId;
@@ -51,15 +51,15 @@ class RecoveryProcessor {
     /**
      * Creates a new instance of the RecoveryProcessor class.
      *
-     * @param metadata         The UpdateableContainerMetadata to use for recovery.
+     * @param containerMetadata         The UpdateableContainerMetadata to use for recovery.
      * @param durableDataLog   The (uninitialized) DurableDataLog to read data from for recovery.
      * @param stateUpdater     A MemoryStateUpdater that can be used to apply the recovered operations.
      */
-    RecoveryProcessor(UpdateableContainerMetadata metadata, DurableDataLog durableDataLog, MemoryStateUpdater stateUpdater) {
-        this.metadata = Preconditions.checkNotNull(metadata, "metadata");
+    RecoveryProcessor(StreamSegmentContainerMetadata containerMetadata, DurableDataLog durableDataLog, MemoryStateUpdater stateUpdater) {
+        this.containerMetadata = Preconditions.checkNotNull(containerMetadata, "metadata");
         this.durableDataLog = Preconditions.checkNotNull(durableDataLog, "durableDataLog");
         this.stateUpdater = Preconditions.checkNotNull(stateUpdater, "stateUpdater");
-        this.traceObjectId = String.format("RecoveryProcessor[%s]", this.metadata.getContainerId());
+        this.traceObjectId = String.format("RecoveryProcessor[%s]", this.containerMetadata.getContainerId());
     }
 
     //endregion
@@ -89,27 +89,27 @@ class RecoveryProcessor {
         log.info("{} Recovery started.", this.traceObjectId);
 
         // Put metadata (and entire container) into 'Recovery Mode'.
-        this.metadata.enterRecoveryMode();
+        this.containerMetadata.enterRecoveryMode();
 
         // Reset metadata.
-        this.metadata.reset();
+        this.containerMetadata.reset();
 
-        OperationMetadataUpdater metadataUpdater = new OperationMetadataUpdater(this.metadata);
+        OperationMetadataUpdater metadataUpdater = new OperationMetadataUpdater(this.containerMetadata);
         this.stateUpdater.enterRecoveryMode(metadataUpdater);
 
         boolean successfulRecovery = false;
         int recoveredItemCount;
         try {
             recoveredItemCount = recoverAllOperations(metadataUpdater);
-            this.metadata.setContainerEpoch(this.durableDataLog.getEpoch());
+            this.containerMetadata.setContainerEpoch(this.durableDataLog.getEpoch());
             long timeElapsed = timer.getElapsedMillis();
             log.info("{} Recovery completed. Epoch = {}, Items Recovered = {}, Time = {}ms.", this.traceObjectId,
-                    this.metadata.getContainerEpoch(), recoveredItemCount, timeElapsed);
-            SegmentStoreMetrics.recoveryCompleted(timeElapsed, this.metadata.getContainerId());
+                    this.containerMetadata.getContainerEpoch(), recoveredItemCount, timeElapsed);
+            SegmentStoreMetrics.recoveryCompleted(timeElapsed, this.containerMetadata.getContainerId());
             successfulRecovery = true;
         } finally {
             // We must exit recovery mode when done, regardless of outcome.
-            this.metadata.exitRecoveryMode();
+            this.containerMetadata.exitRecoveryMode();
             this.stateUpdater.exitRecoveryMode(successfulRecovery);
         }
 
@@ -135,7 +135,7 @@ class RecoveryProcessor {
 
         // Read all entries from the DataFrameLog and append them to the InMemoryOperationLog.
         // Also update metadata along the way.
-        try (DataFrameReader<Operation> reader = new DataFrameReader<>(this.durableDataLog, OperationSerializer.DEFAULT, this.metadata.getContainerId())) {
+        try (DataFrameReader<Operation> reader = new DataFrameReader<>(this.durableDataLog, OperationSerializer.DEFAULT, this.containerMetadata.getContainerId())) {
             DataFrameRecord<Operation> dataFrameRecord;
 
             // We can only recover starting from a MetadataCheckpointOperation; find the first one.
@@ -213,10 +213,10 @@ class RecoveryProcessor {
         if (lastFullAddress != null && lastFullAddress.getSequence() != lastUsedAddress.getSequence()) {
             // This operation spans multiple DataFrames. The TruncationMarker should be set on the last DataFrame
             // that ends with a part of it.
-            this.metadata.recordTruncationMarker(dataFrameRecord.getItem().getSequenceNumber(), lastFullAddress);
+            this.containerMetadata.recordTruncationMarker(dataFrameRecord.getItem().getSequenceNumber(), lastFullAddress);
         } else if (dataFrameRecord.isLastFrameEntry()) {
             // The operation was the last one in the frame. This is a Truncation Marker.
-            this.metadata.recordTruncationMarker(dataFrameRecord.getItem().getSequenceNumber(), lastUsedAddress);
+            this.containerMetadata.recordTruncationMarker(dataFrameRecord.getItem().getSequenceNumber(), lastUsedAddress);
         }
     }
 

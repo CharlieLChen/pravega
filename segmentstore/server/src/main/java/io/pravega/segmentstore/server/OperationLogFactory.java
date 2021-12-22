@@ -15,6 +15,10 @@
  */
 package io.pravega.segmentstore.server;
 
+import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
+import io.pravega.segmentstore.server.logs.DurableLog;
+import io.pravega.segmentstore.server.reading.ContainerReadIndex;
+
 /**
  * Defines a Factory for DurableLog Components.
  */
@@ -29,5 +33,5 @@ public interface OperationLogFactory {
      * @throws IllegalArgumentException If the metadata is already in recovery mode.
      * @return The OperationLog instance.
      */
-    OperationLog createDurableLog(UpdateableContainerMetadata containerMetadata, ReadIndex readIndex);
+    DurableLog createDurableLog(StreamSegmentContainerMetadata containerMetadata, ContainerReadIndex readIndex);
 }

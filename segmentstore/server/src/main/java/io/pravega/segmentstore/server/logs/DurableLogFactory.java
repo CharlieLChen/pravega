@@ -19,6 +19,8 @@ import io.pravega.segmentstore.server.OperationLog;
 import io.pravega.segmentstore.server.OperationLogFactory;
 import io.pravega.segmentstore.server.ReadIndex;
 import io.pravega.segmentstore.server.UpdateableContainerMetadata;
+import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
+import io.pravega.segmentstore.server.reading.ContainerReadIndex;
 import io.pravega.segmentstore.storage.DurableDataLogFactory;
 import com.google.common.base.Preconditions;
 
@@ -49,7 +51,7 @@ public class DurableLogFactory implements OperationLogFactory {
     }
 
     @Override
-    public OperationLog createDurableLog(UpdateableContainerMetadata containerMetadata, ReadIndex readIndex) {
+    public DurableLog createDurableLog(StreamSegmentContainerMetadata containerMetadata, ContainerReadIndex readIndex) {
         return new DurableLog(config, containerMetadata, this.dataLogFactory, readIndex, this.executor);
     }
 }

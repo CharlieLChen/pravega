@@ -15,6 +15,8 @@
  */
 package io.pravega.segmentstore.server;
 
+import io.pravega.segmentstore.server.tables.ContainerTableExtensionImpl;
+
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -48,6 +50,6 @@ public interface SegmentContainerFactory {
          * @return A Map containing new instances of the {@link SegmentContainerExtension}s that were created, indexed
          * by their class descriptors.
          */
-        Map<Class<? extends SegmentContainerExtension>, SegmentContainerExtension> apply(SegmentContainer container, ScheduledExecutorService executor);
+        Map<Class<? extends ContainerTableExtensionImpl>, ContainerTableExtensionImpl> apply(SegmentContainer container, ScheduledExecutorService executor);
     }
 }

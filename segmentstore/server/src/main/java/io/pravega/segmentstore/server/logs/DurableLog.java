@@ -33,10 +33,12 @@ import io.pravega.segmentstore.server.OperationLog;
 import io.pravega.segmentstore.server.ReadIndex;
 import io.pravega.segmentstore.server.ServiceHaltException;
 import io.pravega.segmentstore.server.UpdateableContainerMetadata;
+import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
 import io.pravega.segmentstore.server.logs.operations.MetadataCheckpointOperation;
 import io.pravega.segmentstore.server.logs.operations.Operation;
 import io.pravega.segmentstore.server.logs.operations.OperationPriority;
 import io.pravega.segmentstore.server.logs.operations.StorageMetadataCheckpointOperation;
+import io.pravega.segmentstore.server.reading.ContainerReadIndex;
 import io.pravega.segmentstore.storage.DataLogCorruptedException;
 import io.pravega.segmentstore.storage.DataLogDisabledException;
 import io.pravega.segmentstore.storage.DurableDataLog;
@@ -71,7 +73,7 @@ public class DurableLog extends AbstractService implements OperationLog {
     private final DurableDataLog durableDataLog;
     private final MemoryStateUpdater memoryStateUpdater;
     private final OperationProcessor operationProcessor;
-    private final UpdateableContainerMetadata metadata;
+    private final StreamSegmentContainerMetadata metadata;
     private final ScheduledExecutorService executor;
     private final AtomicReference<Throwable> stopException = new AtomicReference<>();
     private final AtomicBoolean closed;
@@ -92,7 +94,7 @@ public class DurableLog extends AbstractService implements OperationLog {
      * @param executor            The Executor to use for async operations.
      * @throws NullPointerException If any of the arguments are null.
      */
-    public DurableLog(DurableLogConfig config, UpdateableContainerMetadata metadata, DurableDataLogFactory dataFrameLogFactory, ReadIndex readIndex, ScheduledExecutorService executor) {
+    public DurableLog(DurableLogConfig config, StreamSegmentContainerMetadata metadata, DurableDataLogFactory dataFrameLogFactory, ContainerReadIndex readIndex, ScheduledExecutorService executor) {
         Preconditions.checkNotNull(config, "config");
         this.metadata = Preconditions.checkNotNull(metadata, "metadata");
         Preconditions.checkNotNull(dataFrameLogFactory, "dataFrameLogFactory");

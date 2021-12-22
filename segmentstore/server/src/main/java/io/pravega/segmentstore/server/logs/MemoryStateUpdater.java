@@ -31,6 +31,7 @@ import io.pravega.segmentstore.server.logs.operations.MergeSegmentOperation;
 import io.pravega.segmentstore.server.logs.operations.Operation;
 import io.pravega.segmentstore.server.logs.operations.StorageOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentAppendOperation;
+import io.pravega.segmentstore.server.reading.ContainerReadIndex;
 import io.pravega.segmentstore.storage.ThrottleSourceListener;
 import io.pravega.segmentstore.storage.ThrottlerSourceListenerCollection;
 import io.pravega.segmentstore.storage.cache.CacheFullException;
@@ -50,7 +51,7 @@ import lombok.extern.slf4j.Slf4j;
 class MemoryStateUpdater {
     //region Private
 
-    private final ReadIndex readIndex;
+    private final ContainerReadIndex readIndex;
     private final AbstractDrainingQueue<Operation> inMemoryOperationLog;
     private final AtomicBoolean recoveryMode;
     private final ThrottlerSourceListenerCollection readListeners;
@@ -65,7 +66,7 @@ class MemoryStateUpdater {
      * @param inMemoryOperationLog InMemory Operation Log.
      * @param readIndex            The ReadIndex to update.
      */
-    MemoryStateUpdater(AbstractDrainingQueue<Operation> inMemoryOperationLog, ReadIndex readIndex) {
+    MemoryStateUpdater(AbstractDrainingQueue<Operation> inMemoryOperationLog, ContainerReadIndex readIndex) {
         this.inMemoryOperationLog = Preconditions.checkNotNull(inMemoryOperationLog, "inMemoryOperationLog");
         this.readIndex = Preconditions.checkNotNull(readIndex, "readIndex");
         this.recoveryMode = new AtomicBoolean();

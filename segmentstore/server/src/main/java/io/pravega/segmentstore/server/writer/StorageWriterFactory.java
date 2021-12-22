@@ -25,13 +25,7 @@ import io.pravega.segmentstore.contracts.AttributeUpdateType;
 import io.pravega.segmentstore.contracts.Attributes;
 import io.pravega.segmentstore.contracts.SegmentType;
 import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
-import io.pravega.segmentstore.server.OperationLog;
-import io.pravega.segmentstore.server.ReadIndex;
-import io.pravega.segmentstore.server.SegmentMetadata;
-import io.pravega.segmentstore.server.UpdateableContainerMetadata;
-import io.pravega.segmentstore.server.UpdateableSegmentMetadata;
-import io.pravega.segmentstore.server.Writer;
-import io.pravega.segmentstore.server.WriterFactory;
+import io.pravega.segmentstore.server.*;
 import io.pravega.segmentstore.server.attributes.ContainerAttributeIndex;
 import io.pravega.segmentstore.server.logs.PriorityCalculator;
 import io.pravega.segmentstore.server.logs.operations.Operation;
@@ -66,8 +60,8 @@ public class StorageWriterFactory implements WriterFactory {
     }
 
     @Override
-    public Writer createWriter(UpdateableContainerMetadata containerMetadata, OperationLog operationLog, ReadIndex readIndex,
-                               ContainerAttributeIndex attributeIndex, Storage storage, CreateProcessors createProcessors) {
+    public StorageWriter createWriter(UpdateableContainerMetadata containerMetadata, OperationLog operationLog, ReadIndex readIndex,
+                                                          ContainerAttributeIndex attributeIndex, Storage storage, CreateProcessors createProcessors) {
         Preconditions.checkArgument(containerMetadata.getContainerId() == operationLog.getId(),
                 "Given containerMetadata and operationLog have different Container Ids.");
         WriterDataSource dataSource = new StorageWriterDataSource(containerMetadata, operationLog, readIndex, attributeIndex);

@@ -49,7 +49,7 @@ public class ContainerReadIndexFactory implements ReadIndexFactory {
     }
 
     @Override
-    public ReadIndex createReadIndex(ContainerMetadata containerMetadata, ReadOnlyStorage storage) {
+    public ContainerReadIndex createReadIndex(ContainerMetadata containerMetadata, ReadOnlyStorage storage) {
         Exceptions.checkNotClosed(this.closed.get(), this);
         return new ContainerReadIndex(this.config, containerMetadata, storage, this.cacheManager, this.executorService);
     }

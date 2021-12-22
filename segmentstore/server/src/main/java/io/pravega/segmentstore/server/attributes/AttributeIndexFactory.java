@@ -29,5 +29,5 @@ public interface AttributeIndexFactory {
      * @param storage           The Storage to read from and write to.
      * @return A new instance of a class implementing ContainerAttributeIndex.
      */
-    ContainerAttributeIndex createContainerAttributeIndex(ContainerMetadata containerMetadata, Storage storage);
+    ContainerAttributeIndexImpl createContainerAttributeIndex(ContainerMetadata containerMetadata, Storage storage);
 }

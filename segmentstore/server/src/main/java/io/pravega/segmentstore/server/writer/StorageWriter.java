@@ -59,7 +59,7 @@ import lombok.val;
  * Storage Writer. Applies operations from Operation Log to Storage.
  */
 @Slf4j
-class StorageWriter extends AbstractThreadPoolService implements Writer {
+public class StorageWriter extends AbstractThreadPoolService implements Writer {
     //region Members
 
     private final WriterConfig config;

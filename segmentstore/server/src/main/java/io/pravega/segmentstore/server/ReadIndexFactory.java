@@ -15,6 +15,7 @@
  */
 package io.pravega.segmentstore.server;
 
+import io.pravega.segmentstore.server.reading.ContainerReadIndex;
 import io.pravega.segmentstore.storage.ReadOnlyStorage;
 
 /**
@@ -28,7 +29,7 @@ public interface ReadIndexFactory extends AutoCloseable {
      * @param storage           A ReadOnlyStorage to use for reading data that is not in the cache.
      * @return The ReadIndex instance.
      */
-    ReadIndex createReadIndex(ContainerMetadata containerMetadata, ReadOnlyStorage storage);
+    ContainerReadIndex createReadIndex(ContainerMetadata containerMetadata, ReadOnlyStorage storage);
 
     @Override
     void close();

@@ -29,7 +29,7 @@ import io.pravega.segmentstore.server.CacheUtilizationProvider;
 import io.pravega.segmentstore.server.IllegalContainerStateException;
 import io.pravega.segmentstore.server.SegmentStoreMetrics;
 import io.pravega.segmentstore.server.ServiceHaltException;
-import io.pravega.segmentstore.server.UpdateableContainerMetadata;
+import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
 import io.pravega.segmentstore.server.logs.operations.CompletableOperation;
 import io.pravega.segmentstore.server.logs.operations.Operation;
 import io.pravega.segmentstore.server.logs.operations.OperationPriority;
@@ -69,7 +69,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
     private static final int MAX_COMMIT_QUEUE_SIZE = 50;
     private static final Duration COMMIT_PROCESSOR_TIMEOUT = Duration.ofSeconds(10);
 
-    private final UpdateableContainerMetadata metadata;
+    private final StreamSegmentContainerMetadata containerMetadata;
     private final MemoryStateUpdater stateUpdater;
     @GuardedBy("stateLock")
     private final OperationMetadataUpdater metadataUpdater;
@@ -91,25 +91,25 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
     /**
      * Creates a new instance of the OperationProcessor class.
      *
-     * @param metadata         The ContainerMetadata for the Container to process operations for.
+     * @param containerMetadata         The ContainerMetadata for the Container to process operations for.
      * @param stateUpdater     A MemoryStateUpdater that is used to update in-memory structures upon successful Operation committal.
      * @param durableDataLog   The DataFrameLog to write DataFrames to.
      * @param checkpointPolicy The Checkpoint Policy for Metadata.
      * @param executor         An Executor to use for async operations.
      * @throws NullPointerException If any of the arguments are null.
      */
-    OperationProcessor(UpdateableContainerMetadata metadata, MemoryStateUpdater stateUpdater, DurableDataLog durableDataLog, MetadataCheckpointPolicy checkpointPolicy, ScheduledExecutorService executor) {
-        super(String.format("OperationProcessor[%d]", metadata.getContainerId()), executor);
+    OperationProcessor(StreamSegmentContainerMetadata containerMetadata, MemoryStateUpdater stateUpdater, DurableDataLog durableDataLog, MetadataCheckpointPolicy checkpointPolicy, ScheduledExecutorService executor) {
+        super(String.format("OperationProcessor[%d]", containerMetadata.getContainerId()), executor);
         Preconditions.checkNotNull(durableDataLog, "durableDataLog");
-        this.metadata = metadata;
+        this.containerMetadata = containerMetadata;
         this.stateUpdater = Preconditions.checkNotNull(stateUpdater, "stateUpdater");
-        this.metadataUpdater = new OperationMetadataUpdater(this.metadata);
+        this.metadataUpdater = new OperationMetadataUpdater(this.containerMetadata);
         this.operationQueue = new PriorityBlockingDrainingQueue<>(OperationPriority.getMaxPriorityValue());
         this.commitQueue = new BlockingDrainingQueue<>();
         this.state = new QueueProcessingState(checkpointPolicy);
         val args = new DataFrameBuilder.Args(this.state::frameSealed, this.state::commit, this.state::fail, this.executor);
         this.dataFrameBuilder = new DataFrameBuilder<>(durableDataLog, OperationSerializer.DEFAULT, args);
-        this.metrics = new SegmentStoreMetrics.OperationProcessor(this.metadata.getContainerId());
+        this.metrics = new SegmentStoreMetrics.OperationProcessor(this.containerMetadata.getContainerId());
         this.cacheUtilizationProvider = stateUpdater.getCacheUtilizationProvider();
         val throttlerCalculator = ThrottlerCalculator
                 .builder()
@@ -118,7 +118,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
                 .durableDataLogThrottler(durableDataLog.getWriteSettings(), durableDataLog::getQueueStatistics)
                 .operationLogThrottler(this.stateUpdater::getInMemoryOperationLogSize)
                 .build();
-        this.throttler = new Throttler(this.metadata.getContainerId(), throttlerCalculator, this::hasThrottleExemptOperations, executor, this.metrics);
+        this.throttler = new Throttler(this.containerMetadata.getContainerId(), throttlerCalculator, this::hasThrottleExemptOperations, executor, this.metrics);
         this.cacheUtilizationProvider.registerCleanupListener(this.throttler);
         durableDataLog.registerQueueStateChangeListener(this.throttler);
         this.stateUpdater.registerReadListener(this.throttler);
@@ -598,7 +598,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
             try {
                 // Record the end of a frame in the DurableDataLog directly into the base metadata. No need for locking here,
                 // as the metadata has its own.
-                OperationProcessor.this.metadata.recordTruncationMarker(commitArgs.getLastStartedSequenceNumber(), commitArgs.getLogAddress());
+                OperationProcessor.this.containerMetadata.recordTruncationMarker(commitArgs.getLastStartedSequenceNumber(), commitArgs.getLogAddress());
                 final long addressSequence = commitArgs.getLogAddress().getSequence();
 
                 synchronized (stateLock) {

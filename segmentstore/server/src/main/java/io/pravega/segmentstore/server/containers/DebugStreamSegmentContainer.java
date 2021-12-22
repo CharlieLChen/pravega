@@ -67,6 +67,6 @@ public class DebugStreamSegmentContainer extends StreamSegmentContainer implemen
     }
 
     final UpdateableContainerMetadata getMetadata() {
-        return super.metadata;
+        return super.containerMetadata;
     }
 }

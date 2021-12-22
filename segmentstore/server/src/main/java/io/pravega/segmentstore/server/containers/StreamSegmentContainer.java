@@ -63,6 +63,8 @@ import io.pravega.segmentstore.server.WriterFactory;
 import io.pravega.segmentstore.server.WriterSegmentProcessor;
 import io.pravega.segmentstore.server.attributes.AttributeIndexFactory;
 import io.pravega.segmentstore.server.attributes.ContainerAttributeIndex;
+import io.pravega.segmentstore.server.attributes.ContainerAttributeIndexImpl;
+import io.pravega.segmentstore.server.logs.DurableLog;
 import io.pravega.segmentstore.server.logs.PriorityCalculator;
 import io.pravega.segmentstore.server.logs.operations.AttributeUpdaterOperation;
 import io.pravega.segmentstore.server.logs.operations.DeleteSegmentOperation;
@@ -74,7 +76,10 @@ import io.pravega.segmentstore.server.logs.operations.StreamSegmentMapOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentSealOperation;
 import io.pravega.segmentstore.server.logs.operations.StreamSegmentTruncateOperation;
 import io.pravega.segmentstore.server.logs.operations.UpdateAttributesOperation;
+import io.pravega.segmentstore.server.reading.ContainerReadIndex;
 import io.pravega.segmentstore.server.tables.ContainerTableExtension;
+import io.pravega.segmentstore.server.tables.ContainerTableExtensionImpl;
+import io.pravega.segmentstore.server.writer.StorageWriter;
 import io.pravega.segmentstore.storage.SimpleStorageFactory;
 import io.pravega.segmentstore.storage.Storage;
 import io.pravega.segmentstore.storage.StorageFactory;
@@ -116,20 +121,20 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     //region Members
     private static final RetryAndThrowConditionally CACHE_ATTRIBUTES_RETRY = Retry.withExpBackoff(50, 2, 10, 1000)
             .retryWhen(ex -> ex instanceof BadAttributeUpdateException);
-    protected final StreamSegmentContainerMetadata metadata;
-    protected final MetadataStore metadataStore;
+    protected final StreamSegmentContainerMetadata containerMetadata;
+    protected final TableMetadataStore metadataStore;
     private final String traceObjectId;
-    private final OperationLog durableLog;
-    private final ReadIndex readIndex;
-    private final ContainerAttributeIndex attributeIndex;
-    private final Writer writer;
+    private final DurableLog durableLog;
+    private final ContainerReadIndex readIndex;
+    private final ContainerAttributeIndexImpl attributeIndex;
+    private final StorageWriter writer;
     private final Storage storage;
     private final ScheduledExecutorService executor;
     private final MetadataCleaner metadataCleaner;
     private final AtomicBoolean closed;
     private final SegmentStoreMetrics.Container metrics;
-    private final ContainerEventProcessor containerEventProcessor;
-    private final Map<Class<? extends SegmentContainerExtension>, ? extends SegmentContainerExtension> extensions;
+    private final ContainerEventProcessorImpl containerEventProcessor;
+    private final Map<Class<? extends ContainerTableExtensionImpl>, ? extends ContainerTableExtensionImpl> extensions;
     private final ContainerConfig config;
 
     //endregion
@@ -162,18 +167,18 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
 
         this.traceObjectId = String.format("SegmentContainer[%d]", streamSegmentContainerId);
         this.executor = executor;
-        this.metadata = new StreamSegmentContainerMetadata(streamSegmentContainerId, config.getMaxActiveSegmentCount());
+        this.containerMetadata = new StreamSegmentContainerMetadata(streamSegmentContainerId, config.getMaxActiveSegmentCount());
         this.extensions = Collections.unmodifiableMap(createExtensions.apply(this, this.executor));
         this.storage = createStorage(storageFactory);
-        this.readIndex = readIndexFactory.createReadIndex(this.metadata, this.storage);
+        this.readIndex = readIndexFactory.createReadIndex(this.containerMetadata, this.storage);
         this.config = config;
-        this.durableLog = durableLogFactory.createDurableLog(this.metadata, this.readIndex);
+        this.durableLog = durableLogFactory.createDurableLog(this.containerMetadata, this.readIndex);
         shutdownWhenStopped(this.durableLog, "DurableLog");
-        this.attributeIndex = attributeIndexFactory.createContainerAttributeIndex(this.metadata, this.storage);
-        this.writer = writerFactory.createWriter(this.metadata, this.durableLog, this.readIndex, this.attributeIndex, this.storage, this::createWriterProcessors);
+        this.attributeIndex = attributeIndexFactory.createContainerAttributeIndex(this.containerMetadata, this.storage);
+        this.writer = writerFactory.createWriter(this.containerMetadata, this.durableLog, this.readIndex, this.attributeIndex, this.storage, this::createWriterProcessors);
         shutdownWhenStopped(this.writer, "Writer");
         this.metadataStore = createMetadataStore();
-        this.metadataCleaner = new MetadataCleaner(config, this.metadata, this.metadataStore, this::notifyMetadataRemoved,
+        this.metadataCleaner = new MetadataCleaner(config, this.containerMetadata, this.metadataStore, this::notifyMetadataRemoved,
                 this.executor, this.traceObjectId);
         shutdownWhenStopped(this.metadataCleaner, "MetadataCleaner");
         this.metrics = new SegmentStoreMetrics.Container(streamSegmentContainerId);
@@ -187,18 +192,18 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
             val simpleFactory = (SimpleStorageFactory) storageFactory;
             // Initialize storage metadata table segment
             ContainerTableExtension tableExtension = getExtension(ContainerTableExtension.class);
-            String s = NameUtils.getStorageMetadataSegmentName(this.metadata.getContainerId());
+            String s = NameUtils.getStorageMetadataSegmentName(this.containerMetadata.getContainerId());
 
             val metadataStore = new TableBasedMetadataStore(s, tableExtension, simpleFactory.getChunkedSegmentStorageConfig(), simpleFactory.getExecutor());
 
-            return simpleFactory.createStorageAdapter(this.metadata.getContainerId(), metadataStore);
+            return simpleFactory.createStorageAdapter(this.containerMetadata.getContainerId(), metadataStore);
         } else {
             return storageFactory.createStorageAdapter();
         }
     }
 
-    private MetadataStore createMetadataStore() {
-        MetadataStore.Connector connector = new MetadataStore.Connector(this.metadata, this::mapSegmentId,
+    private TableMetadataStore createMetadataStore() {
+        MetadataStore.Connector connector = new MetadataStore.Connector(this.containerMetadata, this::mapSegmentId,
                 this::deleteSegmentImmediate, this::deleteSegmentDelayed, this::runMetadataCleanup);
         ContainerTableExtension tableExtension = getExtension(ContainerTableExtension.class);
         Preconditions.checkArgument(tableExtension != null, "ContainerTableExtension required for initialization.");
@@ -224,13 +229,13 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
      */
     private CompletableFuture<Void> initializeStorage() {
         log.info("{}: Initializing storage.", this.traceObjectId);
-        this.storage.initialize(this.metadata.getContainerEpoch());
+        this.storage.initialize(this.containerMetadata.getContainerEpoch());
 
         if (this.storage instanceof ChunkedSegmentStorage) {
             ChunkedSegmentStorage chunkedSegmentStorage = (ChunkedSegmentStorage) this.storage;
             val snapshotInfoStore = getStorageSnapshotInfoStore();
             // Bootstrap
-            StorageEventProcessor eventProcessor = new StorageEventProcessor(this.metadata.getContainerId(),
+            StorageEventProcessor eventProcessor = new StorageEventProcessor(this.containerMetadata.getContainerId(),
                     this.containerEventProcessor,
                     batch -> chunkedSegmentStorage.getGarbageCollector().processBatch(batch),
                     chunkedSegmentStorage.getConfig().getGarbageCollectionMaxConcurrency());
@@ -244,7 +249,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
      * @return instance of {@link SnapshotInfoStore}.
      */
     SnapshotInfoStore getStorageSnapshotInfoStore() {
-        return new SnapshotInfoStore(this.metadata.getContainerId(),
+        return new SnapshotInfoStore(this.containerMetadata.getContainerId(),
                 snapshotInfo -> saveStorageSnapshot(snapshotInfo, config.getStorageSnapshotTimeout()),
                 () -> readStorageSnapshot(config.getStorageSnapshotTimeout()));
     }
@@ -418,7 +423,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
 
     @Override
     public int getId() {
-        return this.metadata.getContainerId();
+        return this.containerMetadata.getContainerId();
     }
 
     @Override
@@ -525,8 +530,8 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
         this.metrics.deleteSegment();
         TimeoutTimer timer = new TimeoutTimer(timeout);
 
-        long segmentId = this.metadata.getStreamSegmentId(streamSegmentName, false);
-        SegmentMetadata toDelete = this.metadata.getStreamSegmentMetadata(segmentId);
+        long segmentId = this.containerMetadata.getStreamSegmentId(streamSegmentName, false);
+        SegmentMetadata toDelete = this.containerMetadata.getStreamSegmentMetadata(segmentId);
         return this.metadataStore.deleteSegment(streamSegmentName, timer.getRemaining())
                 .thenAccept(deleted -> {
                     if (!deleted) {
@@ -599,7 +604,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
                                                                            AttributeUpdateCollection attributeUpdates,
                                                                            TimeoutTimer timer) {
         // Get a reference to the source segment's metadata now, before the merge. It may not be accessible afterwards.
-        SegmentMetadata sourceMetadata = this.metadata.getStreamSegmentMetadata(sourceSegmentId);
+        SegmentMetadata sourceMetadata = this.containerMetadata.getStreamSegmentMetadata(sourceSegmentId);
 
         CompletableFuture<Void> sealResult = trySealStreamSegment(sourceMetadata, timer.getRemaining());
         if (sourceMetadata.getLength() == 0) {
@@ -619,7 +624,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
                             updateAttributesForSegment(targetSegmentId, attributeUpdates, timer.getRemaining());
                     return updateAttributesIfNeeded.get()
                             .thenCompose(v2 -> deleteStreamSegment(sourceMetadata.getName(), timer.getRemaining())
-                                    .thenApply(v3 -> new MergeStreamSegmentResult(this.metadata.getStreamSegmentMetadata(targetSegmentId).getLength(),
+                                    .thenApply(v3 -> new MergeStreamSegmentResult(this.containerMetadata.getStreamSegmentMetadata(targetSegmentId).getLength(),
                                     sourceMetadata.getLength(), sourceMetadata.getAttributes())));
                 } else {
                     // Source now has some data - we must merge the two.
@@ -666,9 +671,9 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
 
     //endregion
     private CompletableFuture<SnapshotInfo> readStorageSnapshot(Duration timeout) {
-        val segmentId =   this.metadata.getStreamSegmentId(NameUtils.getMetadataSegmentName(this.metadata.getContainerId()), false);
+        val segmentId =   this.containerMetadata.getStreamSegmentId(NameUtils.getMetadataSegmentName(this.containerMetadata.getContainerId()), false);
         if (segmentId != ContainerMetadata.NO_STREAM_SEGMENT_ID) {
-            val map =  this.metadata.getStreamSegmentMetadata(segmentId).getAttributes();
+            val map =  this.containerMetadata.getStreamSegmentMetadata(segmentId).getAttributes();
             val epoch = map.getOrDefault(ATTRIBUTE_SLTS_LATEST_SNAPSHOT_EPOCH, 0L);
             val snapshotId = map.getOrDefault(ATTRIBUTE_SLTS_LATEST_SNAPSHOT_ID, 0L);
             if (epoch > 0) {
@@ -688,7 +693,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
         val attributeUpdates = AttributeUpdateCollection.from(
                 new AttributeUpdate(ATTRIBUTE_SLTS_LATEST_SNAPSHOT_ID, AttributeUpdateType.Replace, checkpoint.getSnapshotId()),
                 new AttributeUpdate(ATTRIBUTE_SLTS_LATEST_SNAPSHOT_EPOCH, AttributeUpdateType.Replace, checkpoint.getEpoch()));
-        return this.metadataStore.getOrAssignSegmentId(NameUtils.getMetadataSegmentName(this.metadata.getContainerId()), timer.getRemaining(),
+        return this.metadataStore.getOrAssignSegmentId(NameUtils.getMetadataSegmentName(this.containerMetadata.getContainerId()), timer.getRemaining(),
                 streamSegmentId -> updateAttributesForSegment(streamSegmentId, attributeUpdates, timer.getRemaining()))
                 .thenRun(() -> log.debug("{}: Save SLTS snapshot. {}", this.traceObjectId, checkpoint));
     }
@@ -702,9 +707,9 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
 
         // To reduce locking in the metadata, we first get the list of Segment Ids, then we fetch their metadata
         // one by one. This only locks the metadata on the first call and, individually, on each call to getStreamSegmentMetadata.
-        return this.metadata.getAllStreamSegmentIds()
+        return this.containerMetadata.getAllStreamSegmentIds()
                 .stream()
-                .map(this.metadata::getStreamSegmentMetadata)
+                .map(this.containerMetadata::getStreamSegmentMetadata)
                 .filter(Objects::nonNull)
                 .map(SegmentMetadata::getSnapshot)
                 .collect(Collectors.toList());
@@ -719,7 +724,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
 
     @Override
     public CompletableFuture<Void> flushToStorage(Duration timeout) {
-        LogFlusher flusher = new LogFlusher(this.metadata.getContainerId(), this.durableLog, this.writer, this.metadataCleaner, this.executor);
+        LogFlusher flusher = new LogFlusher(this.containerMetadata.getContainerId(), this.durableLog, this.writer, this.metadataCleaner, this.executor);
         return flusher.flushToStorage(timeout);
     }
 
@@ -733,7 +738,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     }
 
     private CompletableFuture<Map<AttributeId, Long>> getAttributesForSegment(long segmentId, Collection<AttributeId> attributeIds, boolean cache, TimeoutTimer timer) {
-        SegmentMetadata metadata = this.metadata.getStreamSegmentMetadata(segmentId);
+        SegmentMetadata metadata = this.containerMetadata.getStreamSegmentMetadata(segmentId);
         if (cache) {
             return CACHE_ATTRIBUTES_RETRY.runAsync(() ->
                     getAndCacheAttributes(metadata, attributeIds, cache, timer), StreamSegmentContainer.this.executor);
@@ -803,7 +808,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
                     ex = Exceptions.unwrap(ex);
                     if (ex instanceof BadAttributeUpdateException && ((BadAttributeUpdateException) ex).isPreviousValueMissing()) {
                         // Get the missing attributes and load them into the cache, then retry the operation, exactly once.
-                        SegmentMetadata segmentMetadata = this.metadata.getStreamSegmentMetadata(operation.getStreamSegmentId());
+                        StreamSegmentMetadata segmentMetadata = (StreamSegmentMetadata)this.containerMetadata.getStreamSegmentMetadata(operation.getStreamSegmentId());
                         Collection<AttributeId> attributeIds = updates.stream()
                                 .map(AttributeUpdate::getAttributeId)
                                 .filter(id -> !Attributes.isCoreAttribute(id))
@@ -903,7 +908,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
         return this.attributeIndex.forSegment(segmentId, timeout)
                 .thenApplyAsync(index -> {
                     AttributeIterator indexIterator = index.iterator(fromId, toId, timeout);
-                    return new SegmentAttributeIterator(indexIterator, this.metadata.getStreamSegmentMetadata(segmentId), fromId, toId);
+                    return new SegmentAttributeIterator(indexIterator, this.containerMetadata.getStreamSegmentMetadata(segmentId), fromId, toId);
                 }, this.executor);
     }
 
@@ -992,7 +997,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     }
 
     private <T extends Operation & SegmentOperation> CompletableFuture<Void> addOperation(T operation, Duration timeout) {
-        SegmentMetadata sm = this.metadata.getStreamSegmentMetadata(operation.getStreamSegmentId());
+        StreamSegmentMetadata sm = (StreamSegmentMetadata)this.containerMetadata.getStreamSegmentMetadata(operation.getStreamSegmentId());
         OperationPriority priority = calculatePriority(sm.getType(), operation);
         return this.durableLog.add(operation, priority, timeout);
     }
@@ -1065,7 +1070,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
         @Override
         public SegmentMetadata getInfo() {
             ensureRunning();
-            return StreamSegmentContainer.this.metadata.getStreamSegmentMetadata(this.segmentId);
+            return StreamSegmentContainer.this.containerMetadata.getStreamSegmentMetadata(this.segmentId);
         }
 
         @Override

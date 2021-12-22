@@ -25,6 +25,7 @@ import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.segmentstore.server.ContainerMetadata;
 import io.pravega.segmentstore.server.SegmentMetadata;
 import io.pravega.segmentstore.server.UpdateableContainerMetadata;
+import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
 import io.pravega.segmentstore.server.logs.operations.Operation;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -44,7 +45,7 @@ class OperationMetadataUpdater implements ContainerMetadata {
 
     private static final long MAX_TRANSACTION = Long.MAX_VALUE;
     private final String traceObjectId;
-    private final UpdateableContainerMetadata metadata;
+    private final StreamSegmentContainerMetadata metadata;
     private final ArrayDeque<ContainerMetadataUpdateTransaction> transactions;
     private long nextTransactionId;
 
@@ -58,7 +59,7 @@ class OperationMetadataUpdater implements ContainerMetadata {
      * @param metadata The Container Metadata to update.
      * @throws NullPointerException If any of the arguments are null.
      */
-    OperationMetadataUpdater(UpdateableContainerMetadata metadata) {
+    OperationMetadataUpdater(StreamSegmentContainerMetadata metadata) {
         this.metadata = Preconditions.checkNotNull(metadata, "metadata");
         this.traceObjectId = String.format("OperationMetadataUpdater[%d]", metadata.getContainerId());
         this.nextTransactionId = 0;

@@ -16,6 +16,7 @@
 package io.pravega.segmentstore.server;
 
 import io.pravega.segmentstore.server.attributes.ContainerAttributeIndex;
+import io.pravega.segmentstore.server.writer.StorageWriter;
 import io.pravega.segmentstore.storage.Storage;
 import java.util.Collection;
 
@@ -36,8 +37,8 @@ public interface WriterFactory {
      *                          WriterSegmentProcessors for that Segment.
      * @return An instance of a class that implements the Writer interface.
      */
-    Writer createWriter(UpdateableContainerMetadata containerMetadata, OperationLog operationLog, ReadIndex readIndex,
-                        ContainerAttributeIndex attributeIndex, Storage storage, CreateProcessors createProcessors);
+    StorageWriter createWriter(UpdateableContainerMetadata containerMetadata, OperationLog operationLog, ReadIndex readIndex,
+                               ContainerAttributeIndex attributeIndex, Storage storage, CreateProcessors createProcessors);
 
     @FunctionalInterface
     interface CreateProcessors {
