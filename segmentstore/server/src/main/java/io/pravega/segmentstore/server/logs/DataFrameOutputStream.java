@@ -1,12 +1,12 @@
 /**
  * Copyright Pravega Authors.
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,10 +21,12 @@ import io.pravega.common.io.DirectDataOutput;
 import io.pravega.common.io.SerializationException;
 import io.pravega.common.util.BufferView;
 import io.pravega.common.util.ByteArraySegment;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.function.Consumer;
 import javax.annotation.concurrent.NotThreadSafe;
+
 import lombok.Getter;
 
 /**
@@ -37,7 +39,7 @@ import lombok.Getter;
 class DataFrameOutputStream extends OutputStream implements DirectDataOutput {
     //region Members
 
-    private final Consumer<DataFrame> dataFrameCompleteCallback;
+    private DataFrameBuilder builder;
     private DataFrame currentFrame;
     private boolean hasDataInCurrentFrame;
     @Getter
@@ -52,16 +54,15 @@ class DataFrameOutputStream extends OutputStream implements DirectDataOutput {
      * Creates a new instance of the DataFrameOutputStream class.
      *
      * @param maxDataFrameSize          The maximum size, in bytes, of a Data Frame.
-     * @param dataFrameCompleteCallback A callback that will be invoked when a Data Frame is full.
      * @throws IllegalArgumentException If maxDataFrameSize is not a positive integer.
      * @throws NullPointerException     If any of the arguments are null.
      */
-    DataFrameOutputStream(int maxDataFrameSize, Consumer<DataFrame> dataFrameCompleteCallback) {
+    DataFrameOutputStream(int maxDataFrameSize, DataFrameBuilder builder) {
         Exceptions.checkArgument(maxDataFrameSize > DataFrame.MIN_ENTRY_LENGTH_NEEDED, "maxDataFrameSize",
                 "Must be a at least %s.", DataFrame.MIN_ENTRY_LENGTH_NEEDED);
 
         this.maxDataFrameSize = maxDataFrameSize;
-        this.dataFrameCompleteCallback = Preconditions.checkNotNull(dataFrameCompleteCallback, "dataFrameCompleteCallback");
+        this.builder = Preconditions.checkNotNull(builder, "dataFrameCompleteCallback");
     }
 
     //endregion
@@ -190,7 +191,7 @@ class DataFrameOutputStream extends OutputStream implements DirectDataOutput {
         // Invoke the callback. At the end of this, the frame is committed so we can get rid of it.
         if (!this.currentFrame.isEmpty()) {
             // Only flush something if it's not empty.
-            this.dataFrameCompleteCallback.accept(this.currentFrame);
+            builder.handleDataFrameComplete(this.currentFrame);
         }
 
         reset();

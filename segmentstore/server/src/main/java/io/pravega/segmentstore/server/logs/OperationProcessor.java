@@ -1,12 +1,12 @@
 /**
  * Copyright Pravega Authors.
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,6 +37,7 @@ import io.pravega.segmentstore.server.logs.operations.OperationSerializer;
 import io.pravega.segmentstore.storage.DataLogWriterNotPrimaryException;
 import io.pravega.segmentstore.storage.DurableDataLog;
 import io.pravega.segmentstore.storage.cache.CacheFullException;
+
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -51,6 +52,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
+
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -107,7 +109,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
         this.operationQueue = new PriorityBlockingDrainingQueue<>(OperationPriority.getMaxPriorityValue());
         this.commitQueue = new BlockingDrainingQueue<>();
         this.state = new QueueProcessingState(checkpointPolicy);
-        val args = new DataFrameBuilder.Args(this.state::frameSealed, this.state::commit, this.state::fail, this.executor);
+        DataFrameBuilder.Args args = new DataFrameBuilder.Args(state, executor);
         this.dataFrameBuilder = new DataFrameBuilder<>(durableDataLog, OperationSerializer.DEFAULT, args);
         this.metrics = new SegmentStoreMetrics.OperationProcessor(this.containerMetadata.getContainerId());
         this.cacheUtilizationProvider = stateUpdater.getCacheUtilizationProvider();
@@ -498,7 +500,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
      * for synchronization. Care should be taken if it is refactored out of here.
      */
     @ThreadSafe
-    private class QueueProcessingState {
+    public class QueueProcessingState {
         @GuardedBy("stateLock")
         private ArrayList<CompletableOperation> nextFrameOperations;
         @GuardedBy("stateLock")
@@ -711,7 +713,7 @@ class OperationProcessor extends AbstractThreadPoolService implements AutoClosea
             boolean checkpointExists = false;
             while (!this.metadataTransactions.isEmpty() && this.metadataTransactions.peekFirst().getMetadataTransactionId() <= transactionId) {
                 DataFrameBuilder.CommitArgs t = this.metadataTransactions.pollFirst();
-                checkpointExists |= t.getMetadataTransactionId() == transactionId;
+                checkpointExists = t.getMetadataTransactionId() == transactionId || checkpointExists;
                 if (t.getOperations().size() > 0) {
                     toAck.add(t.getOperations());
                     this.pendingOperationCount -= t.getOperations().size();

@@ -35,6 +35,7 @@ import io.pravega.segmentstore.server.SegmentMetadata;
 import io.pravega.segmentstore.server.SegmentOperation;
 import io.pravega.segmentstore.server.UpdateableContainerMetadata;
 import io.pravega.segmentstore.server.UpdateableSegmentMetadata;
+import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
 import io.pravega.segmentstore.server.containers.StreamSegmentMetadata;
 import io.pravega.segmentstore.server.logs.operations.CheckpointOperationBase;
 import io.pravega.segmentstore.server.logs.operations.DeleteSegmentOperation;
@@ -229,29 +230,29 @@ class ContainerMetadataUpdateTransaction implements ContainerMetadata {
 
     /**
      * Commits all pending changes to the given target Container Metadata.
-     * @param target The UpdateableContainerMetadata to commit to.
+     * @param containerMetadata The UpdateableContainerMetadata to commit to.
      */
-    void commit(UpdateableContainerMetadata target) {
-        Preconditions.checkArgument(target.getContainerId() == this.containerId, "ContainerId mismatch");
-        Preconditions.checkArgument(target.isRecoveryMode() == this.isRecoveryMode(), "isRecoveryMode mismatch");
+    void commit(StreamSegmentContainerMetadata containerMetadata) {
+        Preconditions.checkArgument(containerMetadata.getContainerId() == this.containerId, "ContainerId mismatch");
+        Preconditions.checkArgument(containerMetadata.isRecoveryMode() == this.isRecoveryMode(), "isRecoveryMode mismatch");
 
-        if (target.isRecoveryMode()) {
+        if (containerMetadata.isRecoveryMode()) {
             if (this.processedCheckpoint) {
                 // If we processed a checkpoint during recovery, we need to wipe the metadata clean. We are setting
                 // a brand new one.
-                target.reset();
+                containerMetadata.reset();
             }
 
             // RecoverableMetadata.reset() cleaned up the Operation Sequence number. We need to set it back to whatever
             // we have in our UpdateTransaction. If we have nothing, we'll just set it to the default.
             assert this.newSequenceNumber >= ContainerMetadata.INITIAL_OPERATION_SEQUENCE_NUMBER
                     : "Invalid Sequence Number " + this.newSequenceNumber;
-            target.setOperationSequenceNumber(this.newSequenceNumber);
+            containerMetadata.setOperationSequenceNumber(this.newSequenceNumber);
         }
 
         // Commit all segment-related transactional changes to their respective sources.
         this.segmentUpdates.values().forEach(txn -> {
-            UpdateableSegmentMetadata targetSegmentMetadata = target.getStreamSegmentMetadata(txn.getId());
+            UpdateableSegmentMetadata targetSegmentMetadata = containerMetadata.getStreamSegmentMetadata(txn.getId());
             if (targetSegmentMetadata == null) {
                 targetSegmentMetadata = this.newSegments.get(txn.getId());
             }
@@ -260,10 +261,10 @@ class ContainerMetadataUpdateTransaction implements ContainerMetadata {
         });
 
         // Copy all Segment Metadata
-        copySegmentMetadata(this.newSegments.values(), target);
+        copySegmentMetadata(this.newSegments.values(), containerMetadata);
 
         // Copy truncation points.
-        this.newTruncationPoints.forEach(target::setValidTruncationPoint);
+        this.newTruncationPoints.forEach(containerMetadata::setValidTruncationPoint);
 
         // We are done. Clear the transaction.
         clear();

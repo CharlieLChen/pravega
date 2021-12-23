@@ -24,7 +24,6 @@ import io.pravega.segmentstore.contracts.StreamSegmentNotExistsException;
 import io.pravega.segmentstore.contracts.StreamSegmentSealedException;
 import io.pravega.segmentstore.server.ContainerMetadata;
 import io.pravega.segmentstore.server.SegmentMetadata;
-import io.pravega.segmentstore.server.UpdateableContainerMetadata;
 import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
 import io.pravega.segmentstore.server.logs.operations.Operation;
 import java.util.ArrayDeque;
@@ -45,7 +44,7 @@ class OperationMetadataUpdater implements ContainerMetadata {
 
     private static final long MAX_TRANSACTION = Long.MAX_VALUE;
     private final String traceObjectId;
-    private final StreamSegmentContainerMetadata metadata;
+    private final StreamSegmentContainerMetadata containerMetadata;
     private final ArrayDeque<ContainerMetadataUpdateTransaction> transactions;
     private long nextTransactionId;
 
@@ -56,12 +55,12 @@ class OperationMetadataUpdater implements ContainerMetadata {
     /**
      * Creates a new instance of the OperationMetadataUpdater class.
      *
-     * @param metadata The Container Metadata to update.
+     * @param containerMetadata The Container Metadata to update.
      * @throws NullPointerException If any of the arguments are null.
      */
-    OperationMetadataUpdater(StreamSegmentContainerMetadata metadata) {
-        this.metadata = Preconditions.checkNotNull(metadata, "metadata");
-        this.traceObjectId = String.format("OperationMetadataUpdater[%d]", metadata.getContainerId());
+    OperationMetadataUpdater(StreamSegmentContainerMetadata containerMetadata) {
+        this.containerMetadata = Preconditions.checkNotNull(containerMetadata, "metadata");
+        this.traceObjectId = String.format("OperationMetadataUpdater[%d]", containerMetadata.getContainerId());
         this.nextTransactionId = 0;
         this.transactions = new ArrayDeque<>();
     }
@@ -82,7 +81,7 @@ class OperationMetadataUpdater implements ContainerMetadata {
 
     @Override
     public int getMaximumActiveSegmentCount() {
-        return this.metadata.getMaximumActiveSegmentCount(); // This never changes.
+        return this.containerMetadata.getMaximumActiveSegmentCount(); // This never changes.
     }
 
     @Override
@@ -97,17 +96,17 @@ class OperationMetadataUpdater implements ContainerMetadata {
 
     @Override
     public int getContainerId() {
-        return this.metadata.getContainerId(); // This never changes.
+        return this.containerMetadata.getContainerId(); // This never changes.
     }
 
     @Override
     public long getContainerEpoch() {
-        return this.metadata.getContainerEpoch(); // This never changes.
+        return this.containerMetadata.getContainerEpoch(); // This never changes.
     }
 
     @Override
     public boolean isRecoveryMode() {
-        return this.metadata.isRecoveryMode(); // This never changes.
+        return this.containerMetadata.isRecoveryMode(); // This never changes.
     }
 
     @Override
@@ -155,14 +154,14 @@ class OperationMetadataUpdater implements ContainerMetadata {
         while (!this.transactions.isEmpty() && this.transactions.peekFirst().getTransactionId() <= upToTransactionId) {
             ContainerMetadataUpdateTransaction txn = this.transactions.removeFirst();
             txn.seal();
-            txn.commit(this.metadata);
+            txn.commit(this.containerMetadata);
             commits.add(txn.getTransactionId());
         }
 
         // Rebase the first remaining UpdateTransaction over to the current metadata (it was previously pointing to the
         // last committed UpdateTransaction).
         if (commits.size() > 0 && !this.transactions.isEmpty()) {
-            this.transactions.peekFirst().rebase(this.metadata);
+            this.transactions.peekFirst().rebase(this.containerMetadata);
         }
 
         LoggerHelpers.traceLeave(log, this.traceObjectId, "commit", traceId, commits);
@@ -193,7 +192,7 @@ class OperationMetadataUpdater implements ContainerMetadata {
      */
     long nextOperationSequenceNumber() {
         Preconditions.checkState(!isRecoveryMode(), "Cannot request new Operation Sequence Number in Recovery Mode.");
-        return this.metadata.nextOperationSequenceNumber();
+        return this.containerMetadata.nextOperationSequenceNumber();
     }
 
     /**
@@ -257,7 +256,7 @@ class OperationMetadataUpdater implements ContainerMetadata {
      */
     private <T> T fromMetadata(Function<ContainerMetadata, T> getter) {
         ContainerMetadataUpdateTransaction txn = getActiveTransaction();
-        return getter.apply(txn == null ? this.metadata : txn);
+        return getter.apply(txn == null ? this.containerMetadata : txn);
     }
 
     private ContainerMetadataUpdateTransaction getActiveTransaction() {
@@ -276,12 +275,12 @@ class OperationMetadataUpdater implements ContainerMetadata {
     private ContainerMetadataUpdateTransaction getOrCreateTransaction() {
         if (this.transactions.isEmpty() || this.transactions.peekLast().isSealed()) {
             // No transactions or last transaction is sealed. Create a new one.
-            ContainerMetadata previous = this.metadata;
+            ContainerMetadata previous = this.containerMetadata;
             if (!this.transactions.isEmpty()) {
                 previous = this.transactions.peekLast();
             }
 
-            ContainerMetadataUpdateTransaction txn = new ContainerMetadataUpdateTransaction(previous, this.metadata, this.nextTransactionId);
+            ContainerMetadataUpdateTransaction txn = new ContainerMetadataUpdateTransaction(previous, this.containerMetadata, this.nextTransactionId);
             this.nextTransactionId++;
             this.transactions.addLast(txn);
         }

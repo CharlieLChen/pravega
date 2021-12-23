@@ -30,9 +30,7 @@ import io.pravega.segmentstore.contracts.StreamingException;
 import io.pravega.segmentstore.server.ContainerOfflineException;
 import io.pravega.segmentstore.server.IllegalContainerStateException;
 import io.pravega.segmentstore.server.OperationLog;
-import io.pravega.segmentstore.server.ReadIndex;
 import io.pravega.segmentstore.server.ServiceHaltException;
-import io.pravega.segmentstore.server.UpdateableContainerMetadata;
 import io.pravega.segmentstore.server.containers.StreamSegmentContainerMetadata;
 import io.pravega.segmentstore.server.logs.operations.MetadataCheckpointOperation;
 import io.pravega.segmentstore.server.logs.operations.Operation;
@@ -73,7 +71,7 @@ public class DurableLog extends AbstractService implements OperationLog {
     private final DurableDataLog durableDataLog;
     private final MemoryStateUpdater memoryStateUpdater;
     private final OperationProcessor operationProcessor;
-    private final StreamSegmentContainerMetadata metadata;
+    private final StreamSegmentContainerMetadata containerMetadata;
     private final ScheduledExecutorService executor;
     private final AtomicReference<Throwable> stopException = new AtomicReference<>();
     private final AtomicBoolean closed;
@@ -88,27 +86,27 @@ public class DurableLog extends AbstractService implements OperationLog {
      * Creates a new instance of the DurableLog class.
      *
      * @param config              Durable Log Configuration.
-     * @param metadata            The StreamSegment Container Metadata for the container which this Durable Log is part of.
+     * @param containerMetadata            The StreamSegment Container Metadata for the container which this Durable Log is part of.
      * @param dataFrameLogFactory A DurableDataLogFactory which can be used to create instances of DataFrameLogs.
      * @param readIndex           A ReadIndex which can be used to store newly processed appends.
      * @param executor            The Executor to use for async operations.
      * @throws NullPointerException If any of the arguments are null.
      */
-    public DurableLog(DurableLogConfig config, StreamSegmentContainerMetadata metadata, DurableDataLogFactory dataFrameLogFactory, ContainerReadIndex readIndex, ScheduledExecutorService executor) {
+    public DurableLog(DurableLogConfig config, StreamSegmentContainerMetadata containerMetadata, DurableDataLogFactory dataFrameLogFactory, ContainerReadIndex readIndex, ScheduledExecutorService executor) {
         Preconditions.checkNotNull(config, "config");
-        this.metadata = Preconditions.checkNotNull(metadata, "metadata");
+        this.containerMetadata = Preconditions.checkNotNull(containerMetadata, "metadata");
         Preconditions.checkNotNull(dataFrameLogFactory, "dataFrameLogFactory");
         Preconditions.checkNotNull(readIndex, "readIndex");
         this.executor = Preconditions.checkNotNull(executor, "executor");
 
-        this.durableDataLog = dataFrameLogFactory.createDurableDataLog(metadata.getContainerId());
+        this.durableDataLog = dataFrameLogFactory.createDurableDataLog(containerMetadata.getContainerId());
         assert this.durableDataLog != null : "dataFrameLogFactory created null durableDataLog.";
 
-        this.traceObjectId = String.format("DurableLog[%s]", metadata.getContainerId());
+        this.traceObjectId = String.format("DurableLog[%s]", containerMetadata.getContainerId());
         this.inMemoryOperationLog = createInMemoryLog();
         this.memoryStateUpdater = new MemoryStateUpdater(this.inMemoryOperationLog, readIndex);
         MetadataCheckpointPolicy checkpointPolicy = new MetadataCheckpointPolicy(config, this::queueMetadataCheckpoint, this.executor);
-        this.operationProcessor = new OperationProcessor(this.metadata, this.memoryStateUpdater, this.durableDataLog, checkpointPolicy, executor);
+        this.operationProcessor = new OperationProcessor(this.containerMetadata, this.memoryStateUpdater, this.durableDataLog, checkpointPolicy, executor);
         Services.onStop(this.operationProcessor, this::queueStoppedHandler, this::queueFailedHandler, this.executor);
         this.closed = new AtomicBoolean();
         this.delayedStart = new CompletableFuture<>();
@@ -219,12 +217,12 @@ public class DurableLog extends AbstractService implements OperationLog {
             this.durableDataLog.initialize(DEFAULT_TIMEOUT);
 
             // Initiate the recovery.
-            RecoveryProcessor p = new RecoveryProcessor(this.metadata, this.durableDataLog, this.memoryStateUpdater);
+            RecoveryProcessor p = new RecoveryProcessor(this.containerMetadata, this.durableDataLog, this.memoryStateUpdater);
             int recoveredItemCount = p.performRecovery();
             this.operationProcessor.getMetrics().operationsCompleted(recoveredItemCount, timer.getElapsed());
 
             // Verify that the Recovery Processor has left the metadata in a non-recovery mode.
-            Preconditions.checkState(!this.metadata.isRecoveryMode(), "Recovery completed but Metadata is still in Recovery Mode.");
+            Preconditions.checkState(!this.containerMetadata.isRecoveryMode(), "Recovery completed but Metadata is still in Recovery Mode.");
             return recoveredItemCount > 0;
         } catch (Exception ex) {
             log.error("{} Recovery FAILED.", this.traceObjectId, ex);
@@ -286,7 +284,7 @@ public class DurableLog extends AbstractService implements OperationLog {
 
     @Override
     public int getId() {
-        return this.metadata.getContainerId();
+        return this.containerMetadata.getContainerId();
     }
 
     @Override
@@ -307,7 +305,7 @@ public class DurableLog extends AbstractService implements OperationLog {
     @Override
     public CompletableFuture<Void> truncate(long upToSequenceNumber, Duration timeout) {
         ensureRunning();
-        Preconditions.checkArgument(this.metadata.isValidTruncationPoint(upToSequenceNumber), "Invalid Truncation Point. Must refer to a MetadataCheckpointOperation.");
+        Preconditions.checkArgument(this.containerMetadata.isValidTruncationPoint(upToSequenceNumber), "Invalid Truncation Point. Must refer to a MetadataCheckpointOperation.");
 
         // The SequenceNumber we were given points directly to a MetadataCheckpointOperation. We must not remove it!
         // Instead, it must be the first operation that does survive, so we need to adjust our SeqNo to the one just
@@ -315,7 +313,7 @@ public class DurableLog extends AbstractService implements OperationLog {
         long actualTruncationSequenceNumber = upToSequenceNumber - 1;
 
         // Find the closest Truncation Marker (that does not exceed it).
-        LogAddress truncationFrameAddress = this.metadata.getClosestTruncationMarker(actualTruncationSequenceNumber);
+        LogAddress truncationFrameAddress = this.containerMetadata.getClosestTruncationMarker(actualTruncationSequenceNumber);
         if (truncationFrameAddress == null) {
             // Nothing to truncate.
             return CompletableFuture.completedFuture(null);
@@ -329,7 +327,7 @@ public class DurableLog extends AbstractService implements OperationLog {
         // info will be readily available upon recovery without delay.
         return add(new StorageMetadataCheckpointOperation(), OperationPriority.SystemCritical, timer.getRemaining())
                 .thenComposeAsync(v -> this.durableDataLog.truncate(truncationFrameAddress, timer.getRemaining()), this.executor)
-                .thenRunAsync(() -> this.metadata.removeTruncationMarkers(actualTruncationSequenceNumber), this.executor);
+                .thenRunAsync(() -> this.containerMetadata.removeTruncationMarkers(actualTruncationSequenceNumber), this.executor);
     }
 
     @Override

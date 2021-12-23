@@ -1,12 +1,12 @@
 /**
  * Copyright Pravega Authors.
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,6 +22,7 @@ import io.pravega.segmentstore.contracts.SequencedElement;
 import io.pravega.segmentstore.server.logs.operations.CompletableOperation;
 import io.pravega.segmentstore.storage.DurableDataLog;
 import io.pravega.segmentstore.storage.LogAddress;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -32,6 +33,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import javax.annotation.concurrent.NotThreadSafe;
+
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -62,19 +64,17 @@ public class DataFrameBuilder<T extends SequencedElement> implements AutoCloseab
     /**
      * Creates a new instance of the DataFrameBuilder class.
      *
-     * @param targetLog     A Function that, given a DataFrame, commits that DataFrame to a DurableDataLog and returns
-     *                      a Future that indicates when the operation completes or errors out.
-     * @param serializer    Log Item Serializer to use.
-     * @param args          Arguments for the Builder.
+     * @param targetLog  A Function that, given a DataFrame, commits that DataFrame to a DurableDataLog and returns
+     *                   a Future that indicates when the operation completes or errors out.
+     * @param serializer Log Item Serializer to use.
+     * @param args       Arguments for the Builder.
      * @throws NullPointerException If any of the arguments are null.
      */
     public DataFrameBuilder(DurableDataLog targetLog, Serializer<T> serializer, Args args) {
         this.targetLog = Preconditions.checkNotNull(targetLog, "targetLog");
         this.serializer = Preconditions.checkNotNull(serializer, "serializer");
         this.args = Preconditions.checkNotNull(args, "args");
-        Preconditions.checkNotNull(args.commitSuccess, "args.commitSuccess");
-        Preconditions.checkNotNull(args.commitFailure, "args.commitFailure");
-        this.outputStream = new DataFrameOutputStream(targetLog.getWriteSettings().getMaxWriteLength(), this::handleDataFrameComplete);
+        this.outputStream = new DataFrameOutputStream(targetLog.getWriteSettings().getMaxWriteLength(), this);
         this.lastSerializedSequenceNumber = -1;
         this.lastStartedSequenceNumber = -1;
         this.failureCause = new AtomicReference<>();
@@ -120,16 +120,16 @@ public class DataFrameBuilder<T extends SequencedElement> implements AutoCloseab
      * written to the DataFrame will be discarded. Note that if a LogItem spans multiple DataFrames, in case of failure,
      * the content serialized to already committed DataFrames will not be discarded. That case will have to be dealt with
      * upon reading DataFrames from the DataFrameLog.
-     *
+     * <p>
      * Any exceptions that resulted from the Data Frame failing to commit will be routed through the dataFrameCommitFailureCallback
      * callback, as well as being thrown from this exception.
      *
      * @param logItem The LogItem to append.
-     * @throws NullPointerException If logItem is null.
+     * @throws NullPointerException     If logItem is null.
      * @throws IllegalArgumentException If attempted to add LogItems out of order (based on Sequence Number).
-     * @throws IOException          If the LogItem failed to serialize to the DataLog, or if one of the DataFrames containing
-     *                              the LogItem failed to commit to the DataFrameLog.
-     * @throws ObjectClosedException If the DataFrameBuilder is closed (or in in a failed state) and cannot be used anymore.
+     * @throws IOException              If the LogItem failed to serialize to the DataLog, or if one of the DataFrames containing
+     *                                  the LogItem failed to commit to the DataFrameLog.
+     * @throws ObjectClosedException    If the DataFrameBuilder is closed (or in in a failed state) and cannot be used anymore.
      */
     public void append(T logItem) throws IOException {
         Exceptions.checkNotClosed(this.closed.get(), this);
@@ -180,18 +180,18 @@ public class DataFrameBuilder<T extends SequencedElement> implements AutoCloseab
      * @throws NullPointerException     If the data frame is null.
      * @throws IllegalArgumentException If the data frame is not sealed.
      */
-    private void handleDataFrameComplete(DataFrame dataFrame) {
+    public void handleDataFrameComplete(DataFrame dataFrame) {
         Exceptions.checkArgument(dataFrame.isSealed(), "dataFrame", "Cannot publish a non-sealed DataFrame.");
 
         // Write DataFrame to DataFrameLog.
         CommitArgs commitArgs = new CommitArgs(this.lastSerializedSequenceNumber, this.lastStartedSequenceNumber, dataFrame.getLength());
 
         try {
-            this.args.beforeCommit.accept(commitArgs);
+            this.args.state.frameSealed(commitArgs);
             this.targetLog.append(dataFrame.getData(), this.args.writeTimeout)
                     .thenAcceptAsync(logAddress -> {
                         commitArgs.setLogAddress(logAddress);
-                        this.args.commitSuccess.accept(commitArgs);
+                        this.args.state.commit(commitArgs);
                     }, this.args.executor)
                     .exceptionally(ex -> handleProcessingException(ex, commitArgs));
         } catch (Throwable ex) {
@@ -213,7 +213,7 @@ public class DataFrameBuilder<T extends SequencedElement> implements AutoCloseab
             this.failureCause.compareAndSet(null, ex);
         }
 
-        this.args.commitFailure.accept(ex, commitArgs);
+        this.args.state.fail(ex, commitArgs);
         close();
         return null;
     }
@@ -301,14 +301,13 @@ public class DataFrameBuilder<T extends SequencedElement> implements AutoCloseab
 
     //region Args
 
-    @RequiredArgsConstructor
     public static class Args {
         /**
          * A Callback that will be invoked synchronously upon a DataFrame's sealing, and right before it is about to be
          * submitted to the DurableDataLog processor. The invocation of this method does not imply that the DataFrame
          * has been successfully committed, or even attempted to be committed.
          */
-        final Consumer<CommitArgs> beforeCommit;
+        // Consumer<CommitArgs> beforeCommit;
 
         /**
          * A Callback that will be invoked asynchronously upon every successful commit of a Data Frame. When this is
@@ -316,16 +315,23 @@ public class DataFrameBuilder<T extends SequencedElement> implements AutoCloseab
          * LastFullySerializedSequenceNumber have been committed. Any entry with a Sequence Number higher than that
          * is not yet committed.
          */
-        final Consumer<CommitArgs> commitSuccess;
+        // Consumer<CommitArgs> commitSuccess;
 
         /**
          * A Callback that will be invoked asynchronously upon a failed commit of a Data Frame. When this is called, all
          * entries added via append() that have a sequence number up to, and including, LastStartedSequenceNumber that
          * have not previously been acknowledged, should be failed.
          */
-        final BiConsumer<Throwable, CommitArgs> commitFailure;
-        final Executor executor;
+        // BiConsumer<Throwable, CommitArgs> commitFailure;
+
+        OperationProcessor.QueueProcessingState state;
+        Executor executor;
         final Duration writeTimeout = Duration.ofSeconds(30); // TODO: actual timeout.
+
+        public Args(OperationProcessor.QueueProcessingState state, Executor executor) {
+            this.state = state;
+            this.executor = executor;
+        }
     }
 
     //endregion

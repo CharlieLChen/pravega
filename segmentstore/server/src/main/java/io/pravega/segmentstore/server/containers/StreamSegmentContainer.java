@@ -1012,6 +1012,7 @@ class StreamSegmentContainer extends AbstractService implements SegmentContainer
     }
 
     //endregion
+    
 
     //region DirectSegmentWrapper
 
